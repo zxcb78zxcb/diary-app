@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#efe9dd">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="日记本">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>我的日记本</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --paper: #fdfbf5;
+    --ink: #3a3532;
+    --line: #e8e2d5;
+    --accent: #b07d4f;
+    --muted: #a89f92;
+    --bg: #efe9dd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper:#26241f; --ink:#e6e0d4; --line:#3c382f; --accent:#d9a86e; --muted:#8b8377; --bg:#1b1a17; }
+  }
+  html, body { height: 100%; overscroll-behavior: none; }
+  body {
+    font-family: "Songti SC", "Noto Serif SC", "SimSun", serif;
+    background: var(--bg);
+    color: var(--ink);
+    display: flex;
+    flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px 8px; gap: 10px;
+  }
+  #dateBig { font-size: 26px; font-weight: bold; letter-spacing: 1px; }
+  #dateSub { font-size: 13px; color: var(--muted); margin-top: 3px; }
+  #notTodayTag {
+    display: none; font-size: 11px; color: #fff; background: var(--accent);
+    border-radius: 10px; padding: 2px 9px; margin-left: 8px; vertical-align: middle;
+  }
+  nav { display: flex; gap: 6px; flex-shrink: 0; }
+  nav button {
+    font-family: inherit; font-size: 14px; border: 1px solid var(--line);
+    border-radius: 9px; padding: 8px 12px; cursor: pointer;
+    color: var(--ink); background: var(--paper);
+  }
+  nav button:active { border-color: var(--accent); color: var(--accent); }
+  main { flex: 1; display: flex; justify-content: center; padding: 4px 14px 6px; min-height: 0; }
+  #page {
+    width: 100%; max-width: 820px; background: var(--paper);
+    border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 3px 14px rgba(90,70,40,.10);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #editor {
+    flex: 1; width: 100%; border: none; outline: none; resize: none;
+    background: repeating-linear-gradient(var(--paper) 0 33px, var(--line) 33px 34px);
+    background-attachment: local;
+    font-family: inherit; font-size: 17px; line-height: 34px;
+    padding: 0 22px; color: var(--ink);
+  }
+  footer {
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    padding: 6px 20px 10px; font-size: 12px; color: var(--muted);
+  }
+  #syncStatus { cursor: pointer; }
+  #syncStatus.err { color: #c0392b; }
+  #syncStatus.ok  { color: var(--accent); }
+  /* 抽屉 */
+  #drawer {
+    position: fixed; top: 0; right: -330px; width: 310px; max-width: 86vw; height: 100%;
+    background: var(--paper); border-left: 1px solid var(--line);
+    box-shadow: -4px 0 16px rgba(0,0,0,.10); transition: right .25s;
+    padding: 22px 18px; overflow-y: auto; z-index: 20;
+    padding-top: calc(22px + env(safe-area-inset-top));
+  }
+  #drawer.open { right: 0; }
+  #drawer h2 { font-size: 17px; margin-bottom: 12px; }
+  .year { font-size: 15px; font-weight: bold; cursor: pointer; padding: 9px 6px; border-bottom: 1px solid var(--line); }
+  .year::before { content: "📖 "; }
+  .days { display: none; padding: 4px 0 8px; }
+  .days.show { display: block; }
+  .day { font-size: 14px; padding: 8px 6px 8px 24px; cursor: pointer; border-radius: 6px; }
+  .day:active { background: var(--bg); }
+  .day.current { color: var(--accent); font-weight: bold; }
+  .day span { color: var(--muted); font-size: 12px; margin-left: 6px; }
+  #mask { position: fixed; inset: 0; background: rgba(0,0,0,.2); display: none; z-index: 10; }
+  #mask.show { display: block; }
+  /* 对话框 */
+  dialog {
+    border: 1px solid var(--line); border-radius: 14px; padding: 22px;
+    background: var(--paper); color: var(--ink); max-width: 92vw; width: 420px;
+    font-family: inherit;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  dialog h2 { font-size: 18px; margin-bottom: 6px; }
+  dialog p.hint { font-size: 12.5px; color: var(--muted); line-height: 1.7; margin-bottom: 14px; }
+  dialog label { display: block; font-size: 13px; margin: 10px 0 4px; }
+  dialog input {
+    width: 100%; font-family: inherit; font-size: 15px; padding: 9px 11px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink);
+  }
+  .row { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+  .row button {
+    flex: 1; font-family: inherit; font-size: 15px; padding: 11px;
+    border-radius: 9px; border: 1px solid var(--line); background: var(--bg);
+    color: var(--ink); cursor: pointer; min-width: 100px;
+  }
+  .row button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #cfgMsg { font-size: 13px; margin-top: 10px; min-height: 18px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div id="dateBig">——<span id="notTodayTag">往日</span></div>
+    <div id="dateSub"></div>
+  </div>
+  <nav>
+    <button id="todayBtn">今天</button>
+    <button id="listBtn">📚</button>
+    <button id="cfgBtn">⚙️</button>
+  </nav>
+</header>
+
+<main>
+  <div id="page">
+    <textarea id="editor" placeholder="写点什么吧……" spellcheck="false"></textarea>
+  </div>
+</main>
+
+<footer>
+  <span id="syncStatus">未设置云同步 · 点这里设置</span>
+  <span id="saveStatus"></span>
+</footer>
+
+<div id="mask"></div>
+<div id="drawer">
+  <h2>📚 历年日记</h2>
+  <div id="yearList"></div>
+</div>
+
+<dialog id="cfgDlg">
+  <h2>云同步设置</h2>
+  <p class="hint">日记会存进你自己的 GitHub 私有仓库，手机和电脑打开同一个网址就自动同步。<br>
+  具体怎么建仓库、怎么生成 Token，见「使用说明」。</p>
+  <label>GitHub 用户名</label>
+  <input id="cfgOwner" placeholder="例如 yuu1126" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label>仓库名</label>
+  <input id="cfgRepo" placeholder="例如 my-diary" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label>访问 Token</label>
+  <input id="cfgToken" type="password" placeholder="github_pat_… 或 ghp_…" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <div id="cfgMsg"></div>
+  <div class="row">
+    <button id="cfgSave" class="primary">保存并测试连接</button>
+    <button id="cfgClose">关闭</button>
+  </div>
+  <div class="row">
+    <button id="cfgExport">导出备份</button>
+    <button id="cfgImport">导入备份</button>
+    <input type="file" id="cfgFile" accept=".json" hidden>
+  </div>
+</dialog>
+
+<script src="sync-core.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const WEEK = ['日','一','二','三','四','五','六'];
+const S = SyncCore;
+
+/* ================= 本地存储 ================= */
+const TXT = d => 'diary:' + d;         // 正文
+const MET = d => 'diaryM:' + d;        // {t 本机修改时间, base 上次同步点, sha GitHub 文件 sha}
+const CFG = 'diaryCfg';
+
+function getText(d) { return localStorage.getItem(TXT(d)) || ''; }
+function getMeta(d) { try { return JSON.parse(localStorage.getItem(MET(d))) || {}; } catch { return {}; } }
+function setMeta(d, m) { localStorage.setItem(MET(d), JSON.stringify(m)); }
+function putText(d, text, t) {
+  const m = getMeta(d);
+  if (text) localStorage.setItem(TXT(d), text);
+  else localStorage.removeItem(TXT(d));
+  m.t = t || Date.now();
+  setMeta(d, m);
+}
+function allDates() {
+  const set = new Set();
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k.startsWith('diary:'))  set.add(k.slice(6));
+    if (k.startsWith('diaryM:')) set.add(k.slice(7));
+  }
+  return [...set].filter(S.isDateKey);
+}
+let cfg = {};
+try { cfg = JSON.parse(localStorage.getItem(CFG)) || {}; } catch {}
+
+/* ================= 日期 ================= */
+function keyOf(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function todayKey() { return keyOf(new Date()); }
+function showDate(key) {
+  const [y,m,d] = key.split('-').map(Number);
+  $('dateBig').firstChild.textContent = `${y}年${m}月${d}日`;
+  $('dateSub').textContent = `星期${WEEK[new Date(y, m-1, d).getDay()]} · 第 ${y} 本`;
+  $('notTodayTag').style.display = (key === todayKey()) ? 'none' : 'inline';
+}
+
+/* ================= GitHub API ================= */
+function api(path, opts = {}) {
+  const url = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}`;
+  return fetch(url, Object.assign({
+    headers: {
+      'Authorization': 'Bearer ' + cfg.token,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    }
+  }, opts));
+}
+async function ghGet(path) {
+  const r = await api(path + '?ref=' + encodeURIComponent(cfg.branch || 'main') + '&t=' + Date.now());
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error('读取失败 ' + r.status + (r.status === 401 ? '（Token 不对或已过期）' : ''));
+  const j = await r.json();
+  return { text: S.b64decode(j.content), sha: j.sha };
+}
+async function ghPut(path, text, sha, msg) {
+  const body = { message: msg || ('日记 ' + path), content: S.b64encode(text), branch: cfg.branch || 'main' };
+  if (sha) body.sha = sha;
+  let r = await api(path, { method: 'PUT', body: JSON.stringify(body) });
+  if (r.status === 409 || r.status === 422) {          // sha 过期，重取后再试一次
+    const cur = await ghGet(path);
+    if (cur) { body.sha = cur.sha; } else { delete body.sha; }
+    r = await api(path, { method: 'PUT', body: JSON.stringify(body) });
+  }
+  if (!r.ok) throw new Error('写入失败 ' + r.status);
+  return (await r.json()).content.sha;
+}
+
+/* ================= 同步 ================= */
+let syncing = false, syncTimer = null;
+
+function setSync(text, cls) {
+  const el = $('syncStatus');
+  el.textContent = text;
+  el.className = cls || '';
+}
+function scheduleSync(delay) {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => sync(), delay || 4000);
+}
+
+async function sync(manual) {
+  if (!cfg.token || !cfg.owner || !cfg.repo) { setSync('未设置云同步 · 点这里设置'); return; }
+  if (syncing) return;
+  if (!navigator.onLine) { setSync('离线 · 联网后自动同步'); return; }
+  syncing = true;
+  setSync('同步中…');
+  try {
+    const idxFile = await ghGet('index.json');
+    const remote = idxFile ? JSON.parse(idxFile.text) : {};
+    let idxSha = idxFile ? idxFile.sha : null;
+    let idxDirty = false;
+    let pulled = 0, pushed = 0;
+
+    const dates = new Set([...allDates(), ...Object.keys(remote).filter(S.isDateKey)]);
+    for (const d of dates) {
+      const m = getMeta(d);
+      const lt = m.t || 0, base = m.base || 0;
+      const rt = (remote[d] && remote[d].t) || 0;
+      const act = S.decide(lt, rt, base);
+      if (act === 'none') continue;
+
+      if (act === 'pull') {
+        const rf = await ghGet(S.pathOf(d));
+        const text = rf ? rf.text : '';
+        if (text) localStorage.setItem(TXT(d), text); else localStorage.removeItem(TXT(d));
+        setMeta(d, { t: rt, base: rt, sha: rf ? rf.sha : null });
+        if (d === viewKey) $('editor').value = text;
+        pulled++;
+      } else {
+        let text = getText(d);
+        let sha0 = m.sha || null;
+        if (act === 'conflict') {
+          const rf = await ghGet(S.pathOf(d));
+          text = S.mergeText(text, rf ? rf.text : '');
+          sha0 = rf ? rf.sha : null;
+          localStorage.setItem(TXT(d), text);
+          if (d === viewKey) $('editor').value = text;
+        }
+        const t = Math.max(lt, rt, Date.now());
+        const sha = await ghPut(S.pathOf(d), text, sha0, `日记 ${d}`);
+        setMeta(d, { t: t, base: t, sha: sha });
+        remote[d] = { t: t };
+        idxDirty = true;
+        pushed++;
+      }
+    }
+    if (idxDirty) await ghPut('index.json', JSON.stringify(remote, null, 1), idxSha, '更新目录');
+
+    const now = new Date();
+    setSync(`已同步 ✓ ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`
+            + (pulled ? ` · 收到 ${pulled} 篇` : '') + (pushed ? ` · 上传 ${pushed} 篇` : ''), 'ok');
+  } catch (e) {
+    setSync('同步失败：' + e.message + ' · 点这里重试', 'err');
+  } finally {
+    syncing = false;
+  }
+}
+
+/* ================= 页面 ================= */
+let viewKey = todayKey();
+let saveTimer = null;
+
+function openPage(key) {
+  flushSave();
+  viewKey = key;
+  showDate(key);
+  $('editor').value = getText(key);
+  $('saveStatus').textContent = '';
+}
+function scheduleSave() {
+  $('saveStatus').textContent = '正在保存…';
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flushSave, 500);
+}
+function flushSave() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer); saveTimer = null;
+  putText(viewKey, $('editor').value);
+  $('saveStatus').textContent = '已保存 ✓';
+  scheduleSync(4000);
+}
+
+/* 跨天：停在「今天」这页时，日期一变就自动进入新的一页 */
+setInterval(() => {
+  const t = todayKey();
+  if (viewKey !== t && $('notTodayTag').style.display === 'none') openPage(t);
+}, 20000);
+/* 定时同步 */
+setInterval(() => sync(), 5 * 60 * 1000);
+
+/* ================= 抽屉 ================= */
+function renderDrawer() {
+  const byYear = {};
+  for (const d of allDates()) {
+    if (!getText(d)) continue;
+    (byYear[d.slice(0,4)] = byYear[d.slice(0,4)] || []).push(d);
+  }
+  const years = Object.keys(byYear).sort().reverse();
+  const box = $('yearList');
+  box.innerHTML = years.length ? '' : '<p style="color:var(--muted);font-size:14px">还没有日记，从今天开始写吧。</p>';
+  for (const y of years) {
+    byYear[y].sort().reverse();
+    const yEl = document.createElement('div');
+    yEl.className = 'year';
+    yEl.textContent = `${y} 年（${byYear[y].length} 篇）`;
+    const daysEl = document.createElement('div');
+    daysEl.className = 'days' + (y === viewKey.slice(0,4) ? ' show' : '');
+    for (const dk of byYear[y]) {
+      const dEl = document.createElement('div');
+      dEl.className = 'day' + (dk === viewKey ? ' current' : '');
+      const [, m, dd] = dk.split('-');
+      const preview = getText(dk).replace(/\s+/g, ' ').slice(0, 12);
+      dEl.innerHTML = `${Number(m)}月${Number(dd)}日${dk === todayKey() ? '（今天）' : ''}<span>${preview.replace(/[<>&]/g, '')}</span>`;
+      dEl.onclick = () => { toggleDrawer(false); openPage(dk); };
+      daysEl.appendChild(dEl);
+    }
+    yEl.onclick = () => daysEl.classList.toggle('show');
+    box.appendChild(yEl); box.appendChild(daysEl);
+  }
+}
+function toggleDrawer(open) {
+  $('drawer').classList.toggle('open', open);
+  $('mask').classList.toggle('show', open);
+}
+
+/* ================= 设置 / 备份 ================= */
+$('cfgBtn').onclick = () => {
+  $('cfgOwner').value = cfg.owner || '';
+  $('cfgRepo').value  = cfg.repo  || '';
+  $('cfgToken').value = cfg.token || '';
+  $('cfgMsg').textContent = '';
+  $('cfgDlg').showModal();
+};
+$('cfgClose').onclick = () => $('cfgDlg').close();
+$('cfgSave').onclick = async () => {
+  const next = {
+    owner: $('cfgOwner').value.trim(),
+    repo:  $('cfgRepo').value.trim(),
+    token: $('cfgToken').value.trim(),
+    branch: cfg.branch || 'main'
+  };
+  if (!next.owner || !next.repo || !next.token) { $('cfgMsg').textContent = '三项都要填。'; return; }
+  const old = cfg; cfg = next;
+  $('cfgMsg').textContent = '测试中…';
+  try {
+    const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}`, {
+      headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github+json' }
+    });
+    if (!r.ok) throw new Error(r.status === 404 ? '找不到这个仓库（用户名或仓库名写错了，或 Token 没勾选这个仓库）'
+                             : r.status === 401 ? 'Token 不对或已过期'
+                             : '连接失败 ' + r.status);
+    const info = await r.json();
+    cfg.branch = info.default_branch || 'main';
+    localStorage.setItem(CFG, JSON.stringify(cfg));
+    $('cfgMsg').textContent = '✓ 连上了，开始同步…';
+    $('cfgDlg').close();
+    sync(true);
+  } catch (e) {
+    cfg = old;
+    $('cfgMsg').textContent = '✗ ' + e.message;
+  }
+};
+$('cfgExport').onclick = () => {
+  flushSave();
+  const data = {};
+  for (const d of allDates()) if (getText(d)) data[d] = getText(d);
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `日记备份-${todayKey()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+$('cfgImport').onclick = () => $('cfgFile').click();
+$('cfgFile').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    let n = 0;
+    for (const [k, v] of Object.entries(data)) {
+      if (S.isDateKey(k) && typeof v === 'string' && v) {
+        const cur = getText(k);
+        putText(k, cur ? S.mergeText(cur, v) : v);   // 已有内容不覆盖，两份都留着
+        n++;
+      }
+    }
+    $('cfgMsg').textContent = `✓ 导入了 ${n} 篇，正在同步到云端…`;
+    openPage(viewKey);
+    renderDrawer();
+    sync(true);
+  } catch { $('cfgMsg').textContent = '✗ 文件格式不对，请选导出的备份 .json'; }
+  e.target.value = '';
+};
+
+/* ================= 启动 ================= */
+$('editor').addEventListener('input', scheduleSave);
+$('todayBtn').onclick = () => openPage(todayKey());
+$('listBtn').onclick = () => { renderDrawer(); toggleDrawer(true); };
+$('mask').onclick = () => toggleDrawer(false);
+$('syncStatus').onclick = () => cfg.token ? sync(true) : $('cfgBtn').click();
+window.addEventListener('online', () => sync());
+window.addEventListener('beforeunload', flushSave);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) flushSave();
+  else { const t = todayKey(); if (viewKey !== t && $('notTodayTag').style.display === 'none') openPage(t); sync(); }
+});
+
+openPage(todayKey());
+sync();
+
+if ('serviceWorker' in navigator && location.protocol.startsWith('http'))
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
