@@ -56,6 +56,31 @@
     return new TextDecoder().decode(bytes);
   }
 
+  /* ---- 日历：生成某年某月的整月格子 ----
+   * year 四位数，month 是 1~12。返回若干「周」，每周 7 格（周日起头）。
+   * 有日期的格子是 'YYYY-MM-DD'，补位的空格子是 null。
+   */
+  function monthGrid(year, month) {
+    var first = new Date(year, month - 1, 1);
+    var daysInMonth = new Date(year, month, 0).getDate();
+    var lead = first.getDay();                       // 这个月 1 号是星期几
+    var cells = [];
+    for (var i = 0; i < lead; i++) cells.push(null);
+    for (var d = 1; d <= daysInMonth; d++)
+      cells.push(year + '-' + String(month).padStart(2, '0') + '-' + String(d).padStart(2, '0'));
+    while (cells.length % 7 !== 0) cells.push(null);
+    var weeks = [];
+    for (var j = 0; j < cells.length; j += 7) weeks.push(cells.slice(j, j + 7));
+    return weeks;
+  }
+
+  /** 月份加减，返回 {y, m}。m 用 1~12，跨年自动进位 */
+  function shiftMonth(year, month, delta) {
+    var n = (year * 12 + (month - 1)) + delta;
+    return { y: Math.floor(n / 12), m: (n % 12) + 1 };
+  }
+
   return { decide: decide, mergeText: mergeText, pathOf: pathOf,
-           isDateKey: isDateKey, b64encode: b64encode, b64decode: b64decode };
+           isDateKey: isDateKey, b64encode: b64encode, b64decode: b64decode,
+           monthGrid: monthGrid, shiftMonth: shiftMonth };
 });

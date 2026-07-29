@@ -90,6 +90,52 @@
   .day span { color: var(--muted); font-size: 12px; margin-left: 6px; }
   #mask { position: fixed; inset: 0; background: rgba(0,0,0,.2); display: none; z-index: 10; }
   #mask.show { display: block; }
+  /* 日历 */
+  #calWrap {
+    position: fixed; z-index: 25; display: none;
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: 0 8px 30px rgba(60,45,25,.22);
+    padding: 14px; width: 320px; max-width: 94vw;
+  }
+  #calWrap.show { display: block; }
+  #calHead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  #calHead button {
+    font-family: inherit; font-size: 17px; line-height: 1;
+    border: none; background: none; color: var(--muted);
+    padding: 6px 10px; cursor: pointer; border-radius: 8px;
+  }
+  #calHead button:active { background: var(--bg); color: var(--accent); }
+  #calTitle { font-size: 16px; font-weight: bold; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
+  #calTitle:active { background: var(--bg); }
+  table.cal { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  table.cal th { font-size: 11px; color: var(--muted); font-weight: normal; padding-bottom: 6px; }
+  table.cal th.we { color: var(--accent); }
+  table.cal td { padding: 1px; }
+  .cell {
+    position: relative; height: 38px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14.5px; cursor: pointer; user-select: none;
+  }
+  .cell:active { background: var(--bg); }
+  .cell.empty { cursor: default; }
+  .cell.future { color: var(--line); cursor: default; }
+  .cell.future:active { background: none; }
+  .cell.today { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
+  .cell.sel { background: var(--accent); color: #fff; font-weight: bold; }
+  .cell.has::after {
+    content: ''; position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%);
+    width: 4px; height: 4px; border-radius: 50%; background: var(--accent);
+  }
+  .cell.sel.has::after { background: #fff; }
+  #calFoot {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
+    font-size: 12px; color: var(--muted);
+  }
+  #calFoot button {
+    font-family: inherit; font-size: 13px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  }
   /* 对话框 */
   dialog {
     border: 1px solid var(--line); border-radius: 14px; padding: 22px;
@@ -124,10 +170,29 @@
   </div>
   <nav>
     <button id="todayBtn">今天</button>
-    <button id="listBtn">📚</button>
-    <button id="cfgBtn">⚙️</button>
+    <button id="calBtn" title="日历">📅</button>
+    <button id="listBtn" title="历年日记">📚</button>
+    <button id="cfgBtn" title="设置">⚙️</button>
   </nav>
 </header>
+
+<div id="calWrap">
+  <div id="calHead">
+    <button id="calPrev" title="上个月">‹</button>
+    <div id="calTitle"></div>
+    <button id="calNext" title="下个月">›</button>
+  </div>
+  <table class="cal">
+    <thead><tr>
+      <th class="we">日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th class="we">六</th>
+    </tr></thead>
+    <tbody id="calBody"></tbody>
+  </table>
+  <div id="calFoot">
+    <span id="calCount"></span>
+    <button id="calToday">回到今天</button>
+  </div>
+</div>
 
 <main>
   <div id="page">
@@ -309,6 +374,7 @@ async function sync(manual) {
     const now = new Date();
     setSync(`已同步 ✓ ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`
             + (pulled ? ` · 收到 ${pulled} 篇` : '') + (pushed ? ` · 上传 ${pushed} 篇` : ''), 'ok');
+    if (pulled && $('calWrap').classList.contains('show')) renderCal();   // 新收到的日子补上圆点
   } catch (e) {
     setSync('同步失败：' + e.message + ' · 点这里重试', 'err');
   } finally {
@@ -326,6 +392,10 @@ function openPage(key) {
   showDate(key);
   $('editor').value = getText(key);
   $('saveStatus').textContent = '';
+  if ($('calWrap').classList.contains('show')) {
+    calY = +key.slice(0,4); calM = +key.slice(5,7);
+    renderCal();
+  }
 }
 function scheduleSave() {
   $('saveStatus').textContent = '正在保存…';
@@ -382,6 +452,81 @@ function toggleDrawer(open) {
   $('drawer').classList.toggle('open', open);
   $('mask').classList.toggle('show', open);
 }
+
+/* ================= 日历 ================= */
+let calY, calM;   // 当前显示的年 / 月（月是 1~12）
+
+function openCal() {
+  const [y, m] = viewKey.split('-').map(Number);
+  calY = y; calM = m;
+  renderCal();
+  $('calWrap').classList.add('show');
+  $('mask').classList.add('show');
+  placeCal();
+}
+function closeCal() {
+  $('calWrap').classList.remove('show');
+  if (!$('drawer').classList.contains('open')) $('mask').classList.remove('show');
+}
+/* 挂在 📅 按钮下方；屏幕窄就居中 */
+function placeCal() {
+  const w = $('calWrap'), btn = $('calBtn'), r = btn.getBoundingClientRect();
+  if (window.innerWidth < 420) {
+    w.style.left = '50%'; w.style.transform = 'translateX(-50%)';
+    w.style.top = (r.bottom + 8) + 'px'; w.style.right = 'auto';
+  } else {
+    w.style.transform = 'none';
+    w.style.top = (r.bottom + 8) + 'px';
+    w.style.left = Math.max(8, Math.min(r.left - 140, window.innerWidth - w.offsetWidth - 8)) + 'px';
+    w.style.right = 'auto';
+  }
+}
+function renderCal() {
+  const tk = todayKey();
+  $('calTitle').textContent = `${calY} 年 ${calM} 月`;
+  const weeks = S.monthGrid(calY, calM);
+  const body = $('calBody');
+  body.innerHTML = '';
+  let count = 0;
+  for (const week of weeks) {
+    const tr = document.createElement('tr');
+    for (const dk of week) {
+      const td = document.createElement('td');
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      if (!dk) {
+        cell.classList.add('empty');
+      } else {
+        cell.textContent = Number(dk.slice(8));
+        const has = !!getText(dk);
+        if (has) { cell.classList.add('has'); count++; }
+        if (dk === tk) cell.classList.add('today');
+        if (dk === viewKey) cell.classList.add('sel');
+        if (dk > tk) {
+          cell.classList.add('future');            // 未来的日子不给点
+        } else {
+          cell.onclick = () => { closeCal(); openPage(dk); };
+        }
+      }
+      td.appendChild(cell);
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+  $('calCount').textContent = count ? `本月写了 ${count} 天` : '本月还没写过';
+}
+function moveMonth(delta) {
+  const n = S.shiftMonth(calY, calM, delta);
+  calY = n.y; calM = n.m;
+  renderCal();
+}
+$('calBtn').onclick = () => $('calWrap').classList.contains('show') ? closeCal() : openCal();
+$('calPrev').onclick = () => moveMonth(-1);
+$('calNext').onclick = () => moveMonth(1);
+$('calTitle').onclick = () => { const t = todayKey(); calY = +t.slice(0,4); calM = +t.slice(5,7); renderCal(); };
+$('calToday').onclick = () => { closeCal(); openPage(todayKey()); };
+window.addEventListener('resize', () => { if ($('calWrap').classList.contains('show')) placeCal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCal(); });
 
 /* ================= 设置 / 备份 ================= */
 $('cfgBtn').onclick = () => {
@@ -457,7 +602,7 @@ $('cfgFile').onchange = async e => {
 $('editor').addEventListener('input', scheduleSave);
 $('todayBtn').onclick = () => openPage(todayKey());
 $('listBtn').onclick = () => { renderDrawer(); toggleDrawer(true); };
-$('mask').onclick = () => toggleDrawer(false);
+$('mask').onclick = () => { toggleDrawer(false); closeCal(); };
 $('syncStatus').onclick = () => cfg.token ? sync(true) : $('cfgBtn').click();
 window.addEventListener('online', () => sync());
 window.addEventListener('beforeunload', flushSave);

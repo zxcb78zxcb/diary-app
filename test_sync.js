@@ -85,5 +85,53 @@ eq(S.isDateKey(''),           false, '空字符串不算');
   eq(merged.includes('电脑离线写的') && merged.includes('手机离线写的'), true, '场景6 合并后两份都在');
 }
 
+/* ---- 日历：月份格子 ---- */
+{
+  // 2026 年 7 月：1 号是星期三，31 天
+  const g = S.monthGrid(2026, 7);
+  eq(g.every(w => w.length === 7), true, '日历 每周 7 格');
+  eq(g[0].slice(0, 3), [null, null, null], '2026-07 前面空 3 格（1号是周三）');
+  eq(g[0][3], '2026-07-01', '第一格日期对上');
+  eq(g.flat().filter(Boolean).length, 31, '2026-07 共 31 天');
+  eq(g.flat().filter(Boolean).pop(), '2026-07-31', '最后一天是 31 号');
+  eq(g.flat().length % 7, 0, '总格子数是 7 的倍数');
+
+  // 2 月 / 闰年
+  eq(S.monthGrid(2026, 2).flat().filter(Boolean).length, 28, '2026-02 是 28 天');
+  eq(S.monthGrid(2028, 2).flat().filter(Boolean).length, 29, '2028 闰年 2 月 29 天');
+  eq(S.monthGrid(2100, 2).flat().filter(Boolean).length, 28, '2100 不是闰年');
+
+  // 每个月都合法
+  let allOk = true;
+  for (let y = 2024; y <= 2030; y++) for (let m = 1; m <= 12; m++) {
+    const days = S.monthGrid(y, m).flat().filter(Boolean);
+    const expect = new Date(y, m, 0).getDate();
+    if (days.length !== expect) { allOk = false; console.log('  月份不对', y, m); }
+    if (!days.every(S.isDateKey)) { allOk = false; console.log('  日期格式不对', y, m); }
+    // 星期要对得上：第一天所在列 === 它真实的星期
+    const grid = S.monthGrid(y, m);
+    if (grid[0].indexOf(days[0]) !== new Date(y, m - 1, 1).getDay()) { allOk = false; console.log('  星期错位', y, m); }
+  }
+  eq(allOk, true, '2024–2030 每个月天数、格式、星期位置全对');
+}
+
+/* ---- 日历：翻月 ---- */
+eq(S.shiftMonth(2026, 7, 1),   {y:2026, m:8},  '7月 → 8月');
+eq(S.shiftMonth(2026, 7, -1),  {y:2026, m:6},  '7月 → 6月');
+eq(S.shiftMonth(2026, 12, 1),  {y:2027, m:1},  '12月往后跨年');
+eq(S.shiftMonth(2026, 1, -1),  {y:2025, m:12}, '1月往前跨年');
+eq(S.shiftMonth(2026, 7, 12),  {y:2027, m:7},  '往后 12 个月 = 明年同月');
+eq(S.shiftMonth(2026, 7, -12), {y:2025, m:7},  '往前 12 个月 = 去年同月');
+eq(S.shiftMonth(2026, 1, -13), {y:2024, m:12}, '往前跨两年');
+{
+  // 连翻 60 个月，结果必须始终合法
+  let y = 2026, m = 7, ok = true;
+  for (let i = 0; i < 60; i++) {
+    const n = S.shiftMonth(y, m, 1); y = n.y; m = n.m;
+    if (m < 1 || m > 12 || !Number.isInteger(y)) { ok = false; break; }
+  }
+  eq(ok && y === 2031 && m === 7, true, '连翻 60 个月 → 2031年7月，月份始终 1~12');
+}
+
 console.log(`\n通过 ${pass} 项${fail ? `，失败 ${fail} 项` : '，全部通过 ✓'}`);
 process.exit(fail ? 1 : 0);

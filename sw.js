@@ -1,5 +1,5 @@
 /* 离线缓存。改了 index.html / sync-core.js 之后，把 VERSION 加一 */
-const VERSION = 'diary-v1';
+const VERSION = 'diary-v2';
 const FILES = ['./', 'index.html', 'sync-core.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
