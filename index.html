@@ -886,32 +886,73 @@ $('cfgBtn').onclick = () => {
   $('cfgDlg').showModal();
 };
 $('cfgClose').onclick = () => $('cfgDlg').close();
+/* 连不上时，GitHub 对「仓库不存在」和「Token 看不到这个仓库」都回 404，
+ * 所以分三步问清楚：Token 本身好不好用 → 它是谁的 → 它能不能看到这个仓库。*/
+async function ghDiag(owner, repo, token) {
+  const H = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' };
+
+  const who = await fetch('https://api.github.com/user', { headers: H });
+  if (who.status === 401)
+    return { ok: false, msg: 'Token 本身无效或已过期。多半是复制时漏了几个字符，或者点了 Generate 之后没保存就关了页面。重新生成一个再试。' };
+  if (!who.ok)
+    return { ok: false, msg: `Token 验不过（${who.status}）。重新生成一个试试。` };
+
+  const me = (await who.json()).login;
+  if (me.toLowerCase() !== owner.toLowerCase())
+    return { ok: false, msg: `这个 Token 属于账号「${me}」，但你填的用户名是「${owner}」。把用户名改成 ${me}，或者换用 ${owner} 账号生成的 Token。` };
+
+  const rp = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers: H });
+  if (rp.status === 404) {
+    // Token 没问题、账号也对，那就是「仓库名不对」或「Token 没勾这个仓库」
+    const mine = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated', { headers: H });
+    if (mine.ok) {
+      const names = (await mine.json()).map(x => x.name);
+      const hit = names.find(n => n.toLowerCase() === repo.toLowerCase());
+      if (hit && hit !== repo)
+        return { ok: false, msg: `仓库名大小写不对，应该是「${hit}」。` };
+      if (names.length)
+        return { ok: false, msg: `这个 Token 能访问的仓库是：${names.join('、')}。里面没有「${repo}」——要么名字拼错了，要么生成 Token 时没勾到它（Repository access 里重新勾一次）。` };
+      return { ok: false, msg: `这个 Token 一个仓库都访问不到。回 Token 设置页，Repository access 选「Only select repositories」并勾上 ${repo}，Permissions 里把 Contents 设成 Read and write。` };
+    }
+    return { ok: false, msg: `找不到仓库「${owner}/${repo}」。检查仓库名拼写（注意 Diary 和 Dairy 很容易打错），以及生成 Token 时有没有勾上这个仓库。` };
+  }
+  if (rp.status === 403)
+    return { ok: false, msg: '仓库能看到，但 Token 权限不够。回 Token 设置页，把 Permissions → Repository permissions → Contents 设成 Read and write。' };
+  if (!rp.ok)
+    return { ok: false, msg: '连接失败 ' + rp.status };
+
+  const info = await rp.json();
+  if (info.permissions && info.permissions.push === false)
+    return { ok: false, msg: 'Token 只有读权限，写不进去。把 Contents 改成 Read and write。' };
+  return { ok: true, branch: info.default_branch || 'main' };
+}
+
 $('cfgSave').onclick = async () => {
+  const clean = s => s.trim().replace(/^["'<]+|["'>]+$/g, '');   // 顺手去掉误复制的引号
   const next = {
-    owner: $('cfgOwner').value.trim(),
-    repo:  $('cfgRepo').value.trim(),
-    token: $('cfgToken').value.trim(),
+    owner: clean($('cfgOwner').value),
+    repo:  clean($('cfgRepo').value).replace(/\.git$/, '').replace(/\/+$/, ''),
+    token: clean($('cfgToken').value),
     branch: cfg.branch || 'main'
   };
   if (!next.owner || !next.repo || !next.token) { $('cfgMsg').textContent = '三项都要填。'; return; }
+  // 有人会把整个仓库网址贴进来，帮他拆开
+  const m = next.repo.match(/github\.com\/([^/]+)\/([^/]+)/);
+  if (m) { next.owner = m[1]; next.repo = m[2]; }
+
   const old = cfg; cfg = next;
-  $('cfgMsg').textContent = '测试中…';
+  $('cfgMsg').textContent = '检查中…';
   try {
-    const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}`, {
-      headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github+json' }
-    });
-    if (!r.ok) throw new Error(r.status === 404 ? '找不到这个仓库（用户名或仓库名写错了，或 Token 没勾选这个仓库）'
-                             : r.status === 401 ? 'Token 不对或已过期'
-                             : '连接失败 ' + r.status);
-    const info = await r.json();
-    cfg.branch = info.default_branch || 'main';
+    const res = await ghDiag(cfg.owner, cfg.repo, cfg.token);
+    if (!res.ok) { cfg = old; $('cfgMsg').textContent = '✗ ' + res.msg; return; }
+    cfg.branch = res.branch;
     localStorage.setItem(CFG, JSON.stringify(cfg));
     $('cfgMsg').textContent = '✓ 连上了，开始同步…';
     $('cfgDlg').close();
     sync(true);
   } catch (e) {
     cfg = old;
-    $('cfgMsg').textContent = '✗ ' + e.message;
+    $('cfgMsg').textContent = '✗ 连接出错：' + e.message;
   }
 };
 $('cfgExport').onclick = () => {
