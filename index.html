@@ -136,6 +136,48 @@
     font-family: inherit; font-size: 13px; border: 1px solid var(--line);
     background: var(--bg); color: var(--ink); border-radius: 8px; padding: 6px 12px; cursor: pointer;
   }
+  /* 照片 */
+  #imgStrip {
+    display: none; gap: 8px; padding: 8px 14px 2px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  #imgStrip.show { display: flex; }
+  .thumb {
+    position: relative; flex: 0 0 auto; width: 76px; height: 76px;
+    border-radius: 9px; overflow: hidden; border: 1px solid var(--line);
+    background: var(--bg); cursor: pointer;
+  }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .wait {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--muted);
+  }
+  #pageTools {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 14px 10px; border-top: 1px solid var(--line);
+  }
+  #pageTools button {
+    font-family: inherit; font-size: 14px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink);
+    border-radius: 9px; padding: 8px 14px; cursor: pointer;
+  }
+  #pageTools button:active { border-color: var(--accent); color: var(--accent); }
+  #imgHint { font-size: 11.5px; color: var(--muted); }
+  #page.drop { outline: 2px dashed var(--accent); outline-offset: -5px; }
+  /* 大图 */
+  #viewer {
+    position: fixed; inset: 0; z-index: 40; display: none;
+    background: rgba(20,16,10,.92);
+    flex-direction: column; align-items: center; justify-content: center;
+  }
+  #viewer.show { display: flex; }
+  #viewer img { max-width: 94vw; max-height: 78vh; border-radius: 8px; }
+  #viewerBar { display: flex; gap: 10px; margin-top: 16px; }
+  #viewerBar button {
+    font-family: inherit; font-size: 15px; border: 1px solid rgba(255,255,255,.35);
+    background: transparent; color: #fff; border-radius: 9px; padding: 9px 20px; cursor: pointer;
+  }
+  #viewerBar button.del { border-color: #e08b7a; color: #ffb4a3; }
   /* 对话框 */
   dialog {
     border: 1px solid var(--line); border-radius: 14px; padding: 22px;
@@ -197,8 +239,22 @@
 <main>
   <div id="page">
     <textarea id="editor" placeholder="写点什么吧……" spellcheck="false"></textarea>
+    <div id="imgStrip"></div>
+    <div id="pageTools">
+      <button id="addImgBtn">📷 加照片</button>
+      <span id="imgHint"></span>
+      <input type="file" id="imgFile" accept="image/*" multiple hidden>
+    </div>
   </div>
 </main>
+
+<div id="viewer">
+  <img id="viewerImg" alt="日记照片">
+  <div id="viewerBar">
+    <button id="viewerClose">关闭</button>
+    <button id="viewerDel" class="del">删除这张</button>
+  </div>
+</div>
 
 <footer>
   <span id="syncStatus">未设置云同步 · 点这里设置</span>
@@ -231,6 +287,7 @@
     <button id="cfgImport">导入备份</button>
     <input type="file" id="cfgFile" accept=".json" hidden>
   </div>
+  <p class="hint" style="margin:10px 0 0">备份只含文字。照片本来就存在 GitHub 仓库的 <code>年份/img/</code> 里，去那儿下载即可。</p>
 </dialog>
 
 <script src="sync-core.js"></script>
@@ -266,6 +323,186 @@ function allDates() {
 }
 let cfg = {};
 try { cfg = JSON.parse(localStorage.getItem(CFG)) || {}; } catch {}
+
+/* 这一天有没有东西（正文或照片），日历的小圆点看它 */
+function imgsOf(d) { return getMeta(d).imgs || []; }
+function hasEntry(d) { return !!getText(d) || imgsOf(d).length > 0; }
+
+/* ================= 照片：存在 IndexedDB 里，断网也看得到 ================= */
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('diary-img', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('blobs');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function imgPut(name, blob) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const t = db.transaction('blobs', 'readwrite');
+    t.objectStore('blobs').put(blob, name);
+    t.oncomplete = res; t.onerror = () => rej(t.error);
+  });
+}
+async function imgGet(name) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const q = db.transaction('blobs').objectStore('blobs').get(name);
+    q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error);
+  });
+}
+async function imgDel(name) {
+  const db = await idb();
+  return new Promise((res) => {
+    const t = db.transaction('blobs', 'readwrite');
+    t.objectStore('blobs').delete(name);
+    t.oncomplete = res; t.onerror = res;
+  });
+}
+
+/* 手机拍的照片动辄四五兆，先缩到长边 1600、压成 JPEG，省流量也省仓库空间 */
+function shrink(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const im = new Image();
+    im.onload = () => {
+      URL.revokeObjectURL(url);
+      const MAX = 1600;
+      let { width: w, height: h } = im;
+      const scale = Math.min(1, MAX / Math.max(w, h));
+      w = Math.round(w * scale); h = Math.round(h * scale);
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      cv.getContext('2d').drawImage(im, 0, 0, w, h);
+      const tryQ = q => cv.toBlob(b => {
+        if (!b) return reject(new Error('图片处理失败'));
+        // GitHub 接口对单文件有大小限制，压到 900KB 以内才稳
+        if (b.size > 900 * 1024 && q > 0.45) tryQ(q - 0.12);
+        else resolve(b);
+      }, 'image/jpeg', q);
+      tryQ(0.82);
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); reject(new Error('这个文件不是图片')); };
+    im.src = url;
+  });
+}
+
+const thumbURLs = new Map();          // name -> objectURL，切页时回收
+function freeThumbs() {
+  for (const u of thumbURLs.values()) URL.revokeObjectURL(u);
+  thumbURLs.clear();
+}
+
+async function addImages(files) {
+  const list = [...files].filter(f => f && f.type.startsWith('image/'));
+  if (!list.length) return;
+  const day = viewKey;
+  $('imgHint').textContent = `处理中… 0/${list.length}`;
+  let done = 0;
+  for (const f of list) {
+    try {
+      const blob = await shrink(f);
+      const name = S.newImgName(day);
+      await imgPut(name, blob);
+      const m = getMeta(day);
+      m.imgs = (m.imgs || []).concat(name);
+      m.t = Date.now();
+      setMeta(day, m);
+    } catch (e) {
+      $('imgHint').textContent = '✗ ' + e.message;
+    }
+    $('imgHint').textContent = `处理中… ${++done}/${list.length}`;
+  }
+  $('imgHint').textContent = done ? `加了 ${done} 张` : '';
+  setTimeout(() => { if ($('imgHint').textContent.startsWith('加了')) $('imgHint').textContent = ''; }, 2500);
+  if (day === viewKey) renderStrip();
+  if ($('calWrap').classList.contains('show')) renderCal();
+  scheduleSync(2000);
+}
+
+async function renderStrip() {
+  const day = viewKey;
+  const names = imgsOf(day);
+  const strip = $('imgStrip');
+  strip.classList.toggle('show', names.length > 0);
+  strip.innerHTML = '';
+  freeThumbs();
+  for (const name of names) {
+    const box = document.createElement('div');
+    box.className = 'thumb';
+    const wait = document.createElement('div');
+    wait.className = 'wait';
+    wait.textContent = '…';
+    box.appendChild(wait);
+    strip.appendChild(box);
+    const blob = await imgGet(name);
+    if (day !== viewKey) return;               // 期间翻页了，丢弃
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      thumbURLs.set(name, url);
+      const im = document.createElement('img');
+      im.src = url; im.alt = '日记照片';
+      box.innerHTML = '';
+      box.appendChild(im);
+      box.onclick = () => openViewer(name, url);
+    } else {
+      wait.textContent = '待同步';             // 别的设备加的，还没下下来
+    }
+  }
+}
+
+/* ---- 看大图 / 删除 ---- */
+let viewerName = null;
+function openViewer(name, url) {
+  viewerName = name;
+  $('viewerImg').src = url;
+  $('viewer').classList.add('show');
+}
+function closeViewer() {
+  $('viewer').classList.remove('show');
+  $('viewerImg').removeAttribute('src');
+  viewerName = null;
+}
+$('viewerClose').onclick = closeViewer;
+$('viewer').onclick = e => { if (e.target === $('viewer')) closeViewer(); };
+$('viewerDel').onclick = async () => {
+  if (!viewerName) return;
+  if (!confirm('删掉这张照片？手机和电脑上都会一起删掉。')) return;
+  const day = viewKey, name = viewerName;
+  const m = getMeta(day);
+  m.imgs = (m.imgs || []).filter(n => n !== name);
+  m.gone = (m.gone || []).concat(name);
+  m.t = Date.now();
+  setMeta(day, m);
+  await imgDel(name);
+  closeViewer();
+  renderStrip();
+  if ($('calWrap').classList.contains('show')) renderCal();
+  scheduleSync(1500);
+};
+
+/* ---- 三种加照片的方式：按钮（手机相册/拍照）、粘贴截图、拖进来 ---- */
+$('addImgBtn').onclick = () => $('imgFile').click();
+$('imgFile').onchange = e => { addImages(e.target.files); e.target.value = ''; };
+document.addEventListener('paste', e => {
+  const items = e.clipboardData && e.clipboardData.files;
+  if (items && items.length && [...items].some(f => f.type.startsWith('image/'))) {
+    e.preventDefault();
+    addImages(items);
+  }
+});
+['dragenter','dragover'].forEach(ev => document.addEventListener(ev, e => {
+  if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) {
+    e.preventDefault(); $('page').classList.add('drop');
+  }
+}));
+['dragleave','drop'].forEach(ev => document.addEventListener(ev, e => {
+  if (ev === 'drop' && e.dataTransfer && e.dataTransfer.files.length) {
+    e.preventDefault(); addImages(e.dataTransfer.files);
+  }
+  if (ev === 'drop' || e.relatedTarget === null) $('page').classList.remove('drop');
+}));
 
 /* ================= 日期 ================= */
 function keyOf(d) {
@@ -310,6 +547,99 @@ async function ghPut(path, text, sha, msg) {
   return (await r.json()).content.sha;
 }
 
+/* ---- 图片是二进制，走单独的收发 ---- */
+async function ghPutBlob(path, blob) {
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000)
+    bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  const body = { message: '照片 ' + path, content: btoa(bin), branch: cfg.branch || 'main' };
+  const r = await api(path, { method: 'PUT', body: JSON.stringify(body) });
+  if (!r.ok && r.status !== 422) throw new Error('照片上传失败 ' + r.status);   // 422 = 已存在，当成功
+}
+async function ghGetBlob(path) {
+  const r = await api(path + '?ref=' + encodeURIComponent(cfg.branch || 'main'));
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error('照片读取失败 ' + r.status);
+  const j = await r.json();
+  if (j.content) {
+    const bin = atob(j.content.replace(/\s/g, ''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: 'image/jpeg' });
+  }
+  // 文件偏大时接口不带内容，改用 blob 接口取原始字节
+  const r2 = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/git/blobs/${j.sha}`, {
+    headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.raw' }
+  });
+  if (!r2.ok) throw new Error('照片读取失败 ' + r2.status);
+  return new Blob([await r2.arrayBuffer()], { type: 'image/jpeg' });
+}
+async function ghDelete(path) {
+  const r = await api(path + '?ref=' + encodeURIComponent(cfg.branch || 'main'));
+  if (r.status === 404) return;                       // 本来就没有
+  if (!r.ok) return;
+  const j = await r.json();
+  await api(path, { method: 'DELETE', body: JSON.stringify({
+    message: '删除照片 ' + path, sha: j.sha, branch: cfg.branch || 'main'
+  })});
+}
+
+/* 写 index.json（这个文件是「哪天有日记」的总目录，写坏了别的设备就看不到日记了）。
+ * 要点：如果在我们读取之后、写入之前，另一台设备也改了目录，不能拿我们手里这份直接盖掉——
+ * 那样对方刚记上的日子会从目录里消失。所以遇到冲突就重新读一遍、合并，再写。
+ */
+async function putIndex(mine, sha, depth) {
+  const body = {
+    message: '更新目录',
+    content: S.b64encode(JSON.stringify(mine, null, 1)),
+    branch: cfg.branch || 'main'
+  };
+  if (sha) body.sha = sha;
+  const r = await api('index.json', { method: 'PUT', body: JSON.stringify(body) });
+  if (r.ok) return;
+  if ((r.status === 409 || r.status === 422) && (depth || 0) < 3) {
+    const cur = await ghGet('index.json');                 // 别人抢先写了，拿最新的来合
+    const theirs = cur ? JSON.parse(cur.text) : {};
+    return putIndex(S.mergeIndex(theirs, mine), cur ? cur.sha : null, (depth || 0) + 1);
+  }
+  throw new Error('目录写入失败 ' + r.status);
+}
+
+/* 某一天的照片清单同步：清单取并集，删掉的用墓碑挡住，图片文件本身按需收发 */
+async function syncImgs(d, remote) {
+  const m = getMeta(d);
+  const r = remote[d] || {};
+  const merged = S.mergeImgs(m.imgs, m.gone, r.imgs, r.gone);
+  let moved = 0;
+
+  for (const name of merged.imgs) {
+    const path = S.imgPath(d, name);
+    if (!(await imgGet(name))) {                      // 别的设备加的，拿下来
+      const blob = await ghGetBlob(path);
+      if (blob) { await imgPut(name, blob); moved++; }
+    } else if (!(r.imgs || []).includes(name)) {      // 本机加的，传上去
+      const blob = await imgGet(name);
+      await ghPutBlob(path, blob);
+      moved++;
+    }
+  }
+  for (const name of merged.gone) {
+    if ((r.imgs || []).includes(name)) { await ghDelete(S.imgPath(d, name)); moved++; }
+    await imgDel(name);
+  }
+
+  const changed = JSON.stringify(merged.imgs) !== JSON.stringify(r.imgs || [])
+               || JSON.stringify(merged.gone) !== JSON.stringify(r.gone || []);
+  m.imgs = merged.imgs; m.gone = merged.gone;
+  setMeta(d, m);
+  if (changed) {
+    remote[d] = Object.assign({}, r, { t: r.t || m.t || Date.now(), imgs: merged.imgs });
+    if (merged.gone.length) remote[d].gone = merged.gone;
+  }
+  return { changed, moved };
+}
+
 /* ================= 同步 ================= */
 let syncing = false, syncTimer = null;
 
@@ -348,7 +678,9 @@ async function sync(manual) {
         const rf = await ghGet(S.pathOf(d));
         const text = rf ? rf.text : '';
         if (text) localStorage.setItem(TXT(d), text); else localStorage.removeItem(TXT(d));
-        setMeta(d, { t: rt, base: rt, sha: rf ? rf.sha : null });
+        const keep = getMeta(d);
+        setMeta(d, { t: rt, base: rt, sha: rf ? rf.sha : null,
+                     imgs: keep.imgs || [], gone: keep.gone || [] });
         if (d === viewKey) $('editor').value = text;
         pulled++;
       } else {
@@ -363,18 +695,34 @@ async function sync(manual) {
         }
         const t = Math.max(lt, rt, Date.now());
         const sha = await ghPut(S.pathOf(d), text, sha0, `日记 ${d}`);
-        setMeta(d, { t: t, base: t, sha: sha });
-        remote[d] = { t: t };
+        const keep = getMeta(d);
+        setMeta(d, { t: t, base: t, sha: sha, imgs: keep.imgs || [], gone: keep.gone || [] });
+        remote[d] = Object.assign({}, remote[d], { t: t });   // 别把照片清单覆盖掉
         idxDirty = true;
         pushed++;
       }
     }
-    if (idxDirty) await ghPut('index.json', JSON.stringify(remote, null, 1), idxSha, '更新目录');
+
+    // 照片清单单独过一遍（文件名不会变，所以只合并清单，没有内容冲突）
+    let photos = 0;
+    for (const d of dates) {
+      const m = getMeta(d);
+      const r = remote[d] || {};
+      if (!(m.imgs || []).length && !(m.gone || []).length
+          && !(r.imgs || []).length && !(r.gone || []).length) continue;
+      const res = await syncImgs(d, remote);
+      if (res.changed) idxDirty = true;
+      photos += res.moved;
+      if (res.moved && d === viewKey) renderStrip();
+    }
+
+    if (idxDirty) await putIndex(remote, idxSha);
 
     const now = new Date();
     setSync(`已同步 ✓ ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`
-            + (pulled ? ` · 收到 ${pulled} 篇` : '') + (pushed ? ` · 上传 ${pushed} 篇` : ''), 'ok');
-    if (pulled && $('calWrap').classList.contains('show')) renderCal();   // 新收到的日子补上圆点
+            + (pulled ? ` · 收到 ${pulled} 篇` : '') + (pushed ? ` · 上传 ${pushed} 篇` : '')
+            + (photos ? ` · 照片 ${photos} 张` : ''), 'ok');
+    if ((pulled || photos) && $('calWrap').classList.contains('show')) renderCal();
   } catch (e) {
     setSync('同步失败：' + e.message + ' · 点这里重试', 'err');
   } finally {
@@ -392,6 +740,8 @@ function openPage(key) {
   showDate(key);
   $('editor').value = getText(key);
   $('saveStatus').textContent = '';
+  $('imgHint').textContent = '';
+  renderStrip();
   if ($('calWrap').classList.contains('show')) {
     calY = +key.slice(0,4); calM = +key.slice(5,7);
     renderCal();
@@ -422,7 +772,7 @@ setInterval(() => sync(), 5 * 60 * 1000);
 function renderDrawer() {
   const byYear = {};
   for (const d of allDates()) {
-    if (!getText(d)) continue;
+    if (!hasEntry(d)) continue;
     (byYear[d.slice(0,4)] = byYear[d.slice(0,4)] || []).push(d);
   }
   const years = Object.keys(byYear).sort().reverse();
@@ -498,8 +848,7 @@ function renderCal() {
         cell.classList.add('empty');
       } else {
         cell.textContent = Number(dk.slice(8));
-        const has = !!getText(dk);
-        if (has) { cell.classList.add('has'); count++; }
+        if (hasEntry(dk)) { cell.classList.add('has'); count++; }
         if (dk === tk) cell.classList.add('today');
         if (dk === viewKey) cell.classList.add('sel');
         if (dk > tk) {

@@ -24,6 +24,20 @@
     return 'none';
   }
 
+  /* 本地版用的判断。本地那边的「时间」是文件修改时间，云端那边是 index.json 里记的时间，
+   * 两个数不是一套钟，不能直接比。所以各存各的同步点：
+   *   lt / baseL  本地文件修改时间 / 上次同步时它是多少
+   *   rt / baseR  云端记录的时间   / 上次同步时它是多少
+   */
+  function decideSplit(lt, baseL, rt, baseR) {
+    var localChanged  = (lt || 0) > (baseL || 0);
+    var remoteChanged = (rt || 0) > (baseR || 0);
+    if (localChanged && remoteChanged) return 'conflict';
+    if (remoteChanged) return 'pull';
+    if (localChanged)  return 'push';
+    return 'none';
+  }
+
   /** 冲突时把两边的内容都保留下来，绝不丢字 */
   function mergeText(localText, remoteText) {
     localText  = localText  || '';
@@ -40,6 +54,29 @@
   /** 'YYYY-MM-DD' -> 'YYYY/YYYY-MM-DD.txt'（一年一个文件夹） */
   function pathOf(dateKey) { return dateKey.slice(0, 4) + '/' + dateKey + '.txt'; }
 
+  /* ---- 图片 ----
+   * 图片文件名一旦生成就不再改动，所以不存在「同一张图两边内容不一样」的冲突。
+   * 要处理的只有「这一天有哪几张图」这个清单：两边取并集，再去掉任何一边删过的。
+   * gone 是墓碑，记住删掉的名字，免得另一台设备的旧清单把它又拉回来。
+   */
+  function imgPath(dateKey, name) { return dateKey.slice(0, 4) + '/img/' + name; }
+
+  function newImgName(dateKey) {
+    return dateKey + '-' + Date.now().toString(36)
+         + Math.random().toString(36).slice(2, 6) + '.jpg';
+  }
+
+  function mergeImgs(localImgs, localGone, remoteImgs, remoteGone) {
+    var gone = {};
+    (localGone || []).concat(remoteGone || []).forEach(function (n) { gone[n] = 1; });
+    var seen = {}, imgs = [];
+    (localImgs || []).concat(remoteImgs || []).forEach(function (n) {
+      if (!gone[n] && !seen[n]) { seen[n] = 1; imgs.push(n); }
+    });
+    imgs.sort();                       // 文件名带时间戳，排序即按拍摄先后
+    return { imgs: imgs, gone: Object.keys(gone).sort() };
+  }
+
   function isDateKey(s) { return /^\d{4}-\d{2}-\d{2}$/.test(s); }
 
   /* ---- UTF-8 <-> base64（GitHub API 收发的是 base64） ---- */
@@ -54,6 +91,25 @@
     var bytes = new Uint8Array(bin.length);
     for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new TextDecoder().decode(bytes);
+  }
+
+  /* 合并两份 index.json（「哪天有日记」的总目录）。
+   * 两边的日子全都保留——目录里少一天，别的设备就看不到那天的日记了，所以只增不减。
+   * 同一天取较新的时间；照片清单按并集 + 墓碑合。
+   */
+  function mergeIndex(theirs, mine) {
+    theirs = theirs || {}; mine = mine || {};
+    var out = {}, d;
+    for (d in theirs) out[d] = theirs[d];
+    for (d in mine) {
+      var a = theirs[d] || {}, b = mine[d] || {};
+      var im = mergeImgs(b.imgs, b.gone, a.imgs, a.gone);
+      var e = { t: Math.max(a.t || 0, b.t || 0) };
+      if (im.imgs.length) e.imgs = im.imgs;
+      if (im.gone.length) e.gone = im.gone;
+      out[d] = e;
+    }
+    return out;
   }
 
   /* ---- 日历：生成某年某月的整月格子 ----
@@ -80,7 +136,9 @@
     return { y: Math.floor(n / 12), m: (n % 12) + 1 };
   }
 
-  return { decide: decide, mergeText: mergeText, pathOf: pathOf,
+  return { decide: decide, decideSplit: decideSplit, mergeText: mergeText, pathOf: pathOf,
            isDateKey: isDateKey, b64encode: b64encode, b64decode: b64decode,
-           monthGrid: monthGrid, shiftMonth: shiftMonth };
+           monthGrid: monthGrid, shiftMonth: shiftMonth,
+           imgPath: imgPath, newImgName: newImgName, mergeImgs: mergeImgs,
+           mergeIndex: mergeIndex };
 });
